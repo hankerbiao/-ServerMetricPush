@@ -663,10 +663,6 @@
         }
 
         async function uploadFile(file, program) {
-            if (program === "install-script" && file.name !== "install.sh") {
-                showToast("安装脚本类别只接受 install.sh 文件", "error");
-                return;
-            }
 
             const formData = new FormData();
             formData.append("file", file);
@@ -702,9 +698,7 @@
                     throw new Error(err.detail || "删除失败");
                 }
                 showToast(`已删除 ${filename}`, "success");
-                state.files = state.files.filter(file => file.id !== id);
-                renderTabs();
-                renderContent();
+                await loadFiles();
             } catch (error) {
                 showToast(`删除失败: ${error.message}`, "error");
             }

@@ -25,6 +25,7 @@ go run ./src -config ./config.yml
 # Pushgateway 设置
 pushgateway.url=http://localhost:9091
 pushgateway.job=node
+# 留空时会自动使用本机 IP，Prometheus 可据此区分不同服务器
 pushgateway.instance=
 pushgateway.interval=60
 pushgateway.timeout=10
@@ -33,9 +34,15 @@ pushgateway.timeout=10
 node_exporter.path=node_exporter
 node_exporter.port=9100
 node_exporter.metrics_url=http://localhost:9100/metrics
+
+# 主服务设置（可选）
+control_plane.url=http://127.0.0.1:8080
+control_plane.heartbeat_interval=30
 ```
 
 必填项缺失时，程序会在启动阶段直接报错退出。
+`pushgateway.instance` 留空时，程序会自动回退为本机 IPv4；如果拿不到 IPv4，则回退为 hostname。
+如果未配置 `control_plane.url`，主动注册功能会自动关闭，不影响原有 Pushgateway 推送。
 
 ## 本地调试
 
@@ -68,6 +75,16 @@ sudo systemctl start node-push-exporter
 ```bash
 --config /etc/node-push-exporter/config.yaml
 ```
+
+## 主服务节点状态
+
+`binary-download-service` 现在也承担主服务能力，用来接收 `node-push-exporter` 的注册和心跳。节点状态页入口：
+
+```bash
+http://<binary-download-service>/agents
+```
+
+页面会展示当前节点在线状态、最近心跳、Pushgateway 推送结果、最近错误，以及对应的 node_exporter 指标地址。
 
 ## 常用命令
 

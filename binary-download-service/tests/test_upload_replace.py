@@ -66,6 +66,29 @@ class UploadReplaceTests(unittest.TestCase):
         self.assertEqual(parsed["os"], "darwin")
         self.assertEqual(parsed["arch"], "arm64")
 
+    def test_parse_filename_supports_install_script_category(self):
+        parsed = parse_filename("install.sh")
+
+        self.assertEqual(parsed["program"], "install-script")
+        self.assertEqual(parsed["version"], "install.sh")
+        self.assertEqual(parsed["os"], "script")
+        self.assertEqual(parsed["arch"], "shell")
+
+    def test_download_returns_uploaded_file_content(self):
+        content = b"downloadable-binary"
+
+        with patch("main.UPLOAD_DIR", self.temp_dir.name):
+            upload = self.client.post(
+                "/api/upload",
+                files={"file": (self.filename, content, "application/octet-stream")},
+            )
+            self.assertEqual(upload.status_code, 200)
+
+            download = self.client.get(f"/download/{self.filename}")
+
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.content, content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,4 +66,14 @@ assert_fail \
   "darwin amd64 should fail" \
   bash -lc 'uname() { if [[ "$1" == "-s" ]]; then printf "Darwin\n"; else printf "x86_64\n"; fi; }; source "'"${INSTALL_SH}"'"; resolve_files'
 
+assert_eq \
+  "$(bash -uc 'source "'"${INSTALL_SH}"'"; printf "%s" "${BASE_URL}"')" \
+  "http://10.17.154.252:8888" \
+  "base url default under nounset"
+
+assert_eq \
+  "$(printf '%s\n' 'main() { printf "stdin-main-ran"; }' 'if [[ ${#BASH_SOURCE[@]} -eq 0 ]]; then' '  main "$@"' 'elif [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' '  main "$@"' 'fi' | bash -u)" \
+  "stdin-main-ran" \
+  "stdin execution should not fail when BASH_SOURCE is unset"
+
 echo "install tests passed"

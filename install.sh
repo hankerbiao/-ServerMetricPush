@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_URL="${BINARY_DOWNLOAD_BASE_URL:-http://10.2.48.120:8888}"
+BASE_URL="${BINARY_DOWNLOAD_BASE_URL:-http://10.17.154.252:8888}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-$(pwd)}"
 NODE_EXPORTER_BIN="/usr/local/bin/node_exporter"
 NODE_EXPORTER_SERVICE_PATH="/etc/systemd/system/node_exporter.service"
@@ -222,6 +222,8 @@ main() {
   log "结果: install.sh 执行完成"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ ${#BASH_SOURCE[@]} -eq 0 ]]; then
+  main "$@"
+elif [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi

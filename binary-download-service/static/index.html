@@ -471,6 +471,7 @@
             loading: false,
             activeTab: "node_exporter"
         };
+        let contentClickHandlerBound = false;
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -604,6 +605,7 @@
             const dropzone = document.getElementById("dropzone");
             const fileInput = document.getElementById("file-input");
             const selectBtn = document.getElementById("select-btn");
+            const content = document.getElementById("content");
 
             selectBtn?.addEventListener("click", () => fileInput.click());
 
@@ -634,17 +636,20 @@
                 if (file) await uploadFile(file, state.activeTab);
             });
 
-            document.getElementById("content")?.addEventListener("click", async (e) => {
-                const copyBtn = e.target.closest("[data-copy]");
-                if (copyBtn) {
-                    await copyLink(copyBtn.dataset.copy);
-                }
+            if (!contentClickHandlerBound && content) {
+                content.addEventListener("click", async (e) => {
+                    const copyBtn = e.target.closest("[data-copy]");
+                    if (copyBtn) {
+                        await copyLink(copyBtn.dataset.copy);
+                    }
 
-                const deleteBtn = e.target.closest("[data-delete-id]");
-                if (deleteBtn) {
-                    await deleteFile(deleteBtn.dataset.deleteId, deleteBtn.dataset.deleteName);
-                }
-            });
+                    const deleteBtn = e.target.closest("[data-delete-id]");
+                    if (deleteBtn) {
+                        await deleteFile(deleteBtn.dataset.deleteId, deleteBtn.dataset.deleteName);
+                    }
+                });
+                contentClickHandlerBound = true;
+            }
         }
 
         async function copyLink(filename) {

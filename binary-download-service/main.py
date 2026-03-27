@@ -4,6 +4,7 @@ import shutil
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -12,9 +13,18 @@ from schemas import FileResponse, FileListResponse
 
 app = FastAPI(title="Binary Download Service")
 
-# 解析文件名
+# 添加 CORS 支持
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 解析文件名 - 兼容 `{version}-{os}-{arch}` 和 `{version}.{os}-{arch}` 两种格式
 FILENAME_PATTERN = re.compile(
-    r'^(node_exporter|node-push-exporter)-(.+?)-(linux|darwin)-(amd64|arm64)(\.tar\.gz)?$'
+    r"^(?P<program>node_exporter|node-push-exporter)-(?P<version>.+?)[.-](?P<os>linux|darwin)-(?P<arch>amd64|arm64)(?P<ext>\.tar\.gz)?$"
 )
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -47,16 +57,30 @@ def delete_file(file_id: int, db: Session = Depends(get_db)):
     return {"message": "文件删除成功"}
 
 
-def parse_filename(filename: str) -> Optional[dict]:
+def parse_filename(filename: str) -> dict:
     """解析文件名提取 program, version, os, arch"""
     match = FILENAME_PATTERN.match(filename)
-    if not match:
-        return None
+    if match:
+        return {
+            "program": match.group("program"),
+            "version": match.group("version"),
+            "os": match.group("os"),
+            "arch": match.group("arch"),
+        }
+
+    # 如果不匹配格式，尝试从文件名推断 program
+    if filename.startswith("node_exporter"):
+        program = "node_exporter"
+    elif filename.startswith("node-push-exporter"):
+        program = "node-push-exporter"
+    else:
+        program = "unknown"
+
     return {
-        "program": match.group(1),
-        "version": match.group(2),
-        "os": match.group(3),
-        "arch": match.group(4),
+        "program": program,
+        "version": filename,
+        "os": "unknown",
+        "arch": "unknown",
     }
 
 
@@ -64,22 +88,17 @@ def parse_filename(filename: str) -> Optional[dict]:
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     # 解析文件名
     parsed = parse_filename(file.filename)
-    if not parsed:
-        raise HTTPException(
-            status_code=400,
-            detail="文件名格式不正确，应为: program-version-os-arch.tar.gz 例如: node_exporter-1.8.1-linux-amd64.tar.gz"
-        )
 
     # 保存文件
     file_path = os.path.join(UPLOAD_DIR, file.filename)
 
-    # 如果文件已存在，先删除旧文件
-    if os.path.exists(file_path):
-        old_record = db.query(FileRecord).filter(FileRecord.filename == file.filename).first()
-        if old_record:
-            if os.path.exists(old_record.file_path):
-                os.remove(old_record.file_path)
-            db.delete(old_record)
+    # 同名文件视为替换：先删旧记录并立刻 flush，释放 filename 唯一索引
+    old_record = db.query(FileRecord).filter(FileRecord.filename == file.filename).first()
+    if old_record:
+        if os.path.exists(old_record.file_path):
+            os.remove(old_record.file_path)
+        db.delete(old_record)
+        db.flush()
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)

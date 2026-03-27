@@ -73,11 +73,34 @@ sudo systemctl start node-push-exporter
 
 ```bash
 go test ./...
+./build.sh
 ./node-push-exporter --version
 curl http://localhost:9100/metrics
 sudo journalctl -u node-push-exporter -f
 sudo systemctl status node-push-exporter
 ```
+
+## 发布包
+
+执行：
+
+```bash
+./build.sh
+```
+
+会在 `./releases` 目录下生成这几个发布包：
+
+- `node-push-exporter-linux-amd64.tar.gz`
+- `node-push-exporter-linux-arm64.tar.gz`
+- `node-push-exporter-linux-armv7.tar.gz`
+
+每个压缩包都包含：
+
+- `node-push-exporter`
+- `config.yml`
+- `README.md`
+
+其他机器可以按自身架构下载对应的 `.tar.gz`，解压后直接修改 `config.yml` 并运行。
 
 ## 故障排查
 

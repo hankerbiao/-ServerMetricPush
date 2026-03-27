@@ -30,6 +30,7 @@ from schemas import (
 
 app = FastAPI(title="Binary Download Service")
 INSTALL_SCRIPT_NAME = "install.sh"
+UNINSTALL_SCRIPT_NAME = "uninstall.sh"
 INSTALL_SCRIPT_PROGRAM = "install-script"
 HEARTBEAT_INTERVAL_SECONDS = 30
 OFFLINE_TIMEOUT_SECONDS = 90
@@ -82,7 +83,7 @@ def delete_file(file_id: int, db: Session = Depends(get_db)):
 
 def parse_filename(filename: str) -> dict:
     """解析文件名提取 program, version, os, arch"""
-    if filename == INSTALL_SCRIPT_NAME:
+    if filename == INSTALL_SCRIPT_NAME or filename == UNINSTALL_SCRIPT_NAME:
         return {
             "program": INSTALL_SCRIPT_PROGRAM,
             "version": filename,
@@ -104,8 +105,6 @@ def parse_filename(filename: str) -> dict:
         program = "node_exporter"
     elif filename.startswith("node-push-exporter"):
         program = "node-push-exporter"
-    elif filename == INSTALL_SCRIPT_NAME:
-        program = INSTALL_SCRIPT_PROGRAM
     else:
         program = "unknown"
 

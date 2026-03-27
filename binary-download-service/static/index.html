@@ -446,7 +446,7 @@
         <header class="header">
             <div>
                 <h1>二进制文件管理台</h1>
-                <p>管理并分发 node_exporter、node-push-exporter 及安装脚本</p>
+                <p>管理并分发 node_exporter、node-push-exporter 及安装/卸载脚本</p>
             </div>
             <a class="header-link" href="/agents">查看节点状态</a>
         </header>
@@ -463,7 +463,7 @@
         const PROGRAMS = [
             { id: "node_exporter", name: "node_exporter", abbr: "NE", desc: "Prometheus 节点监控导出器" },
             { id: "node-push-exporter", name: "node-push-exporter", abbr: "NP", desc: "Node 指标推送服务" },
-            { id: "install-script", name: "安装脚本", abbr: "IS", desc: "自动化安装脚本" }
+            { id: "install-script", name: "安装/卸载脚本", abbr: "IS", desc: "自动化安装和卸载脚本" }
         ];
 
         const state = {
@@ -546,7 +546,7 @@
                             <input type="file" id="file-input" class="file-input" data-program="${state.activeTab}">
                             <div class="dropzone-icon">📁</div>
                             <h3>拖拽文件到此处或点击选择</h3>
-                            <p>支持任意格式文件，install.sh 类型文件将归类到安装脚本</p>
+                            <p>支持任意格式文件，install.sh/uninstall.sh 将归类到安装脚本</p>
                             <button class="btn btn-primary" id="select-btn">选择文件</button>
                         </div>
                     </div>

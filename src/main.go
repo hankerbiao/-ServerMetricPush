@@ -1,41 +1,30 @@
 package main
 
-/*
-	node-push-exporter 主程序
-
-	该程序通过启动 node_exporter 子进程来采集系统指标，
-	并将指标数据推送到 Prometheus Pushgateway。
-
-	支持的操作系统：Linux (node_exporter 支持的所有平台)
-
-	工作流程：
-	1. 启动 node_exporter 子进程(监听在本地9100端口)
-	2. 定期从 node_exporter 的 /metrics 接口获取指标
-	3. 将指标推送到 Prometheus Pushgateway
-
-	指标来源：node_exporter (https://github.com/prometheus/node_exporter)
-*/
-
 import (
 	"bytes"
-	"flag"      // 命令行参数解析
-	"fmt"       // 格式化输出
-	"io"        // IO操作
-	"log"       // 日志记录
-	"net/http"  // HTTP客户端
-	"os"        // 操作系统功能
-	"os/exec"   // 执行子进程
-	"os/signal" // 信号处理
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"strings" // 字符串处理
-	"syscall" // 系统调用
-	"time"    // 时间处理
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 
-	"node-push-exporter/src/config" // 配置加载
-	"node-push-exporter/src/pusher" // Pushgateway推送
+	"node-push-exporter/src/config"
+	"node-push-exporter/src/controlplane"
+	"node-push-exporter/src/pusher"
 )
 
-// 程序版本和构建时间
 var (
 	version   = "dev"
 	buildTime = "unknown"
@@ -43,105 +32,193 @@ var (
 
 const defaultConfigPath = "./config.yml"
 
-// nodeExporterProcess 保存 node_exporter 进程信息
 type nodeExporterProcess struct {
 	cmd *exec.Cmd
 }
 
-// 主函数入口
+type controlPlaneRuntimeState struct {
+	mu                sync.Mutex
+	lastPushAt        time.Time
+	lastPushSuccessAt time.Time
+	lastPushErrorAt   time.Time
+	pushFailCount     int
+	lastError         string
+	nodeExporterUp    bool
+}
+
+func newControlPlaneRuntimeState() *controlPlaneRuntimeState {
+	return &controlPlaneRuntimeState{nodeExporterUp: true}
+}
+
+func (s *controlPlaneRuntimeState) recordFailure(err error, nodeExporterUp bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	s.lastPushAt = now
+	s.lastPushErrorAt = now
+	s.pushFailCount++
+	s.lastError = err.Error()
+	s.nodeExporterUp = nodeExporterUp
+}
+
+func (s *controlPlaneRuntimeState) RecordFetchFailure(err error) {
+	s.recordFailure(err, false)
+}
+
+func (s *controlPlaneRuntimeState) RecordPushFailure(err error) {
+	s.recordFailure(err, true)
+}
+
+func (s *controlPlaneRuntimeState) RecordPushSuccess() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	s.lastPushAt = now
+	s.lastPushSuccessAt = now
+	s.pushFailCount = 0
+	s.lastError = ""
+	s.nodeExporterUp = true
+}
+
+func (s *controlPlaneRuntimeState) Snapshot(agentID string) controlplane.HeartbeatRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status := "online"
+	if !s.nodeExporterUp || s.pushFailCount > 0 || s.lastError != "" {
+		status = "degraded"
+	}
+
+	return controlplane.HeartbeatRequest{
+		AgentID:           agentID,
+		Status:            status,
+		LastError:         s.lastError,
+		LastPushAt:        cloneTimePointer(s.lastPushAt),
+		LastPushSuccessAt: cloneTimePointer(s.lastPushSuccessAt),
+		LastPushErrorAt:   cloneTimePointer(s.lastPushErrorAt),
+		PushFailCount:     s.pushFailCount,
+		NodeExporterUp:    s.nodeExporterUp,
+	}
+}
+
 func main() {
-	// 默认从当前工作目录读取 config.yml，便于直接运行二进制文件做本地调试。
-	// 系统部署场景仍然可以通过 -config 显式指定 /etc 下的配置文件。
 	configPath := flag.String("config", defaultConfigPath, "配置文件路径")
 	showVersion := flag.Bool("version", false, "显示版本信息")
 	flag.Parse()
 
-	// 如果指定了版本参数，显示版本后退出
 	if *showVersion {
 		fmt.Printf("node-push-exporter version %s (构建时间: %s)\n", version, buildTime)
 		fmt.Printf("使用 node_exporter 采集指标\n")
 		os.Exit(0)
 	}
 
-	// 加载配置文件
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	// 输出启动信息，方便在 systemd 或容器日志中快速确认关键配置。
 	log.Printf("启动 node-push-exporter 版本 %s", version)
 	log.Printf("Pushgateway地址: %s", cfg.Pushgateway.URL)
 	log.Printf("任务名称: %s, 推送间隔: %d秒", cfg.Pushgateway.Job, cfg.Pushgateway.Interval)
 
-	// 启动 node_exporter 子进程
+	pushInstance := effectivePushInstance(cfg.Pushgateway.Instance)
+	if pushInstance != "" {
+		log.Printf("Pushgateway实例标识: %s", pushInstance)
+	}
+
 	exporter, err := startNodeExporter(cfg.NodeExporter.Path, cfg.NodeExporter.Port)
 	if err != nil {
 		log.Fatalf("启动 node_exporter 失败: %v", err)
 	}
-	defer exporter.Stop() // 程序退出时停止 node_exporter
+	defer exporter.Stop()
 
 	log.Printf("node_exporter 已启动，地址: %s", cfg.NodeExporter.MetricsURL)
 
-	// Pushgateway 客户端只负责把已经抓到的 Prometheus 文本内容原样推送出去。
 	pusherClient := pusher.NewPusher(
 		cfg.Pushgateway.URL,
 		pusher.WithJob(cfg.Pushgateway.Job),
-		pusher.WithInstance(cfg.Pushgateway.Instance),
+		pusher.WithInstance(pushInstance),
 		pusher.WithTimeout(time.Duration(cfg.Pushgateway.Timeout)*time.Second),
 	)
 
-	// 创建定时器，用于定期推送指标
 	ticker := time.NewTicker(time.Duration(cfg.Pushgateway.Interval) * time.Second)
 	defer ticker.Stop()
 
-	// 创建信号通道，用于处理优雅退出
+	runtimeState := newControlPlaneRuntimeState()
+	var controlPlaneClient *controlplane.Client
+	var registerRequest controlplane.RegisterRequest
+	var heartbeatCh <-chan time.Time
+	registered := false
+	if cfg.ControlPlane.Enabled() {
+		controlPlaneClient = controlplane.NewClient(
+			cfg.ControlPlane.URL,
+			time.Duration(cfg.Pushgateway.Timeout)*time.Second,
+		)
+		registerRequest = buildRegisterRequest(cfg)
+		if err := controlPlaneClient.Register(registerRequest); err != nil {
+			log.Printf("控制面注册失败，后续会继续重试: %v", err)
+		} else {
+			registered = true
+			log.Printf("控制面注册成功，节点ID: %s", registerRequest.AgentID)
+		}
+
+		heartbeatTicker := time.NewTicker(time.Duration(cfg.ControlPlane.HeartbeatInterval) * time.Second)
+		defer heartbeatTicker.Stop()
+		heartbeatCh = heartbeatTicker.C
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 等待 node_exporter 完全启动
 	time.Sleep(2 * time.Second)
 
-	// 启动后先推一次，避免必须等待一个完整周期后才在 Pushgateway 中看到数据。
-	if err := fetchAndPush(cfg.NodeExporter.MetricsURL, pusherClient); err != nil {
+	if err := fetchAndPush(cfg.NodeExporter.MetricsURL, pusherClient, runtimeState); err != nil {
 		log.Printf("首次推送失败: %v", err)
 	}
 
-	// 主循环：等待定时器或信号
 	for {
 		select {
 		case <-ticker.C:
-			// 定时器触发，获取并推送指标
-			if err := fetchAndPush(cfg.NodeExporter.MetricsURL, pusherClient); err != nil {
+			if err := fetchAndPush(cfg.NodeExporter.MetricsURL, pusherClient, runtimeState); err != nil {
 				log.Printf("推送失败: %v", err)
 			}
+		case <-heartbeatCh:
+			if controlPlaneClient == nil {
+				continue
+			}
+
+			if !registered {
+				if err := controlPlaneClient.Register(registerRequest); err != nil {
+					log.Printf("控制面注册重试失败: %v", err)
+					continue
+				}
+				registered = true
+				log.Printf("控制面注册成功，节点ID: %s", registerRequest.AgentID)
+			}
+
+			if err := controlPlaneClient.Heartbeat(runtimeState.Snapshot(registerRequest.AgentID)); err != nil {
+				if apiErr, ok := err.(*controlplane.APIError); ok && apiErr.StatusCode == http.StatusNotFound {
+					registered = false
+					log.Printf("控制面心跳返回节点不存在，下次周期重新注册: %v", err)
+					continue
+				}
+				log.Printf("控制面心跳失败: %v", err)
+				continue
+			}
 		case sig := <-sigChan:
-			// 收到退出信号，优雅关闭
 			log.Printf("收到信号 %v, 正在关闭...", sig)
 			return
 		}
 	}
 }
-
-/*
-startNodeExporter 启动 node_exporter 子进程
-
-参数:
-executablePath - node_exporter 可执行文件路径
-port           - node_exporter 监听端口
-
-返回值:
-*nodeExporterProcess - node_exporter 进程管理对象
-error - 启动过程中的错误
-*/
 func startNodeExporter(executablePath string, port int) (*nodeExporterProcess, error) {
 	resolvedPath, err := resolveNodeExporterPath(executablePath)
 	if err != nil {
 		return nil, err
 	}
 
-	// 启动一个受当前进程托管的 node_exporter 子进程。
-	// 这里只打开与当前用途直接相关的 collectors，保持行为清晰可控。
 	cmd := exec.Command(resolvedPath,
 		fmt.Sprintf("--web.listen-address=:%d", port),
 		"--web.telemetry-path=/metrics",
@@ -160,7 +237,6 @@ func startNodeExporter(executablePath string, port int) (*nodeExporterProcess, e
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr
 
-	// 启动进程
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动 node_exporter 失败: %w", err)
 	}
@@ -261,83 +337,161 @@ func formatNodeExporterStartError(prefix string, err error, stderr *bytes.Buffer
 	return fmt.Errorf("%s: %w", prefix, err)
 }
 
-// Stop 停止 node_exporter 进程
 func (p *nodeExporterProcess) Stop() {
 	if p.cmd != nil && p.cmd.Process != nil {
-		// 主程序退出时显式结束子进程，避免遗留孤儿 node_exporter。
 		log.Printf("停止 node_exporter 进程，PID: %d", p.cmd.Process.Pid)
 		p.cmd.Process.Kill()
 		p.cmd.Wait()
 	}
 }
-
-/*
-fetchAndPush 从 node_exporter 获取指标并推送到 Pushgateway
-
-参数:
-metricsURL - node_exporter 的 metrics 接口地址
-pusher     - Pushgateway 推送客户端
-
-返回值:
-error - 推送过程中的错误信息
-*/
-func fetchAndPush(metricsURL string, pusher *pusher.Pusher) error {
-	// 先抓取本机 node_exporter 指标，再直接转交给 Pushgateway。
+func fetchAndPush(metricsURL string, pusher *pusher.Pusher, runtimeState *controlPlaneRuntimeState) error {
 	metrics, err := fetchMetrics(metricsURL)
 	if err != nil {
+		if runtimeState != nil {
+			runtimeState.RecordFetchFailure(err)
+		}
 		return fmt.Errorf("获取指标失败: %w", err)
 	}
 
 	// 推送到 Pushgateway
 	if err := pusher.Push([]byte(metrics)); err != nil {
+		if runtimeState != nil {
+			runtimeState.RecordPushFailure(err)
+		}
 		return fmt.Errorf("推送失败: %w", err)
 	}
 
+	if runtimeState != nil {
+		runtimeState.RecordPushSuccess()
+	}
 	log.Printf("指标推送成功，来源: %s", metricsURL)
 	return nil
 }
-
-/*
-fetchMetrics 从指定 URL 获取 Prometheus 格式的指标数据
-
-参数:
-url - metrics 接口地址
-
-返回值:
-string - 指标数据文本
-error - 获取过程中的错误
-*/
 func fetchMetrics(url string) (string, error) {
-	// 读取本机 metrics 时仍然设置超时，防止 node_exporter 卡住时主循环被长期阻塞。
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	// 发送 GET 请求
 	resp, err := client.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("HTTP请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 只有 200 才视为抓取成功，其他状态码都应当进入日志告警。
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP状态码错误: %d", resp.StatusCode)
 	}
 
-	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	// 转换为字符串
 	metrics := string(body)
-
-	// 空响应通常意味着 exporter 异常或拿到了非预期内容，这里直接视为错误。
 	if strings.TrimSpace(metrics) == "" {
 		return "", fmt.Errorf("指标数据为空")
 	}
 
 	return metrics, nil
+}
+
+func buildRegisterRequest(cfg *config.Config) controlplane.RegisterRequest {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown-host"
+	}
+
+	return controlplane.RegisterRequest{
+		AgentID:                buildAgentID(hostname),
+		Hostname:               hostname,
+		Version:                version,
+		OS:                     runtime.GOOS,
+		Arch:                   runtime.GOARCH,
+		IP:                     detectNodeIP(),
+		PushgatewayURL:         cfg.Pushgateway.URL,
+		PushIntervalSeconds:    cfg.Pushgateway.Interval,
+		NodeExporterPort:       cfg.NodeExporter.Port,
+		NodeExporterMetricsURL: cfg.NodeExporter.MetricsURL,
+		StartedAt:              time.Now().UTC(),
+	}
+}
+
+func effectivePushInstance(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if ip := detectNodeIP(); ip != "" {
+		return ip
+	}
+	hostname, _ := os.Hostname()
+	return hostname
+}
+
+func buildAgentID(hostname string) string {
+	seed := readMachineID()
+	if seed == "" {
+		seed = hostname
+	}
+	sum := sha256.Sum256([]byte("node-push-exporter:" + seed))
+	return hex.EncodeToString(sum[:16])
+}
+
+func readMachineID() string {
+	paths := []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+
+func detectNodeIP() string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ip := extractIP(addr)
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if ipv4 := ip.To4(); ipv4 != nil {
+				return ipv4.String()
+			}
+		}
+	}
+
+	return ""
+}
+
+func cloneTimePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	cloned := value
+	return &cloned
+}
+
+func extractIP(addr net.Addr) net.IP {
+	switch value := addr.(type) {
+	case *net.IPNet:
+		return value.IP
+	case *net.IPAddr:
+		return value.IP
+	default:
+		return nil
+	}
 }

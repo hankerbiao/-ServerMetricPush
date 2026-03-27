@@ -84,3 +84,16 @@ func TestStartNodeExporter_ReturnsErrorWhenProcessExitsImmediately(t *testing.T)
 		t.Fatalf("startNodeExporter() error = %q, want stderr output", err)
 	}
 }
+
+func TestEffectivePushInstance_PrefersConfiguredValue(t *testing.T) {
+	if got := effectivePushInstance("custom-instance"); got != "custom-instance" {
+		t.Fatalf("effectivePushInstance() = %q, want %q", got, "custom-instance")
+	}
+}
+
+func TestEffectivePushInstance_FallsBackWhenEmpty(t *testing.T) {
+	got := effectivePushInstance("")
+	if got == "" {
+		t.Fatal("effectivePushInstance() = empty, want detected ip or hostname")
+	}
+}

@@ -7,7 +7,7 @@ RELEASES_DIR="${ROOT_DIR}/releases"
 BUILD_DIR="${RELEASES_DIR}/build"
 APP_NAME="node-push-exporter"
 CONFIG_FILE="${ROOT_DIR}/config.yml"
-UPLOAD_URL="${BINARY_DOWNLOAD_UPLOAD_URL:-http://127.0.0.1:8888/api/upload}"
+UPLOAD_URL="${BINARY_DOWNLOAD_UPLOAD_URL:-http://10.17.154.252:8888/api/upload}"
 
 TARGETS=(
   "linux amd64"

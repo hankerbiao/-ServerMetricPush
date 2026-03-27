@@ -71,6 +71,36 @@ assert_eq \
   "http://10.17.154.252:8888" \
   "base url default under nounset"
 
+config_file="$(mktemp)"
+cat <<'EOF' > "${config_file}"
+pushgateway.url=http://localhost:9091
+node_exporter.metrics_url=http://127.0.0.1:9200/metrics
+EOF
+assert_eq \
+  "$(bash -lc 'source "'"${INSTALL_SH}"'"; printf "%s" "$(get_config_value "'"${config_file}"'" node_exporter.metrics_url http://127.0.0.1:9100/metrics)"')" \
+  "http://127.0.0.1:9200/metrics" \
+  "config value lookup"
+rm -f "${config_file}"
+
+assert_eq \
+  "$(bash -lc 'source "'"${INSTALL_SH}"'"; printf "%s" "$(get_config_value /tmp/non-existent-config node_exporter.metrics_url http://127.0.0.1:9100/metrics)"')" \
+  "http://127.0.0.1:9100/metrics" \
+  "config default fallback"
+
+assert_fail \
+  "inactive service should fail with diagnostics" \
+  bash -lc 'source "'"${INSTALL_SH}"'"; fail() { printf "%s\n" "$1"; return 1; }; systemctl() { if [[ "$1" == "is-active" ]]; then return 1; elif [[ "$1" == "status" ]]; then printf "status output"; fi; }; journalctl() { printf "journal output"; }; curl() { return 0; }; verify_service_health "node_exporter" "http://127.0.0.1:9100/metrics"'
+
+assert_eq \
+  "$(bash -lc 'source "'"${INSTALL_SH}"'"; command() { [[ "$1" == "-v" && "$2" == "restorecon" ]] && return 0; builtin command "$@"; }; restorecon() { printf "%s|" "$@"; }; restore_selinux_context /tmp/a /tmp/b' | grep -o '\-Rv|/tmp/a|/tmp/b|')" \
+  "-Rv|/tmp/a|/tmp/b|" \
+  "restorecon runs when available"
+
+assert_eq \
+  "$(bash -lc 'source "'"${INSTALL_SH}"'"; command() { [[ "$1" == "-v" && "$2" == "restorecon" ]] && return 1; builtin command "$@"; }; restorecon() { printf "unexpected"; }; restore_selinux_context /tmp/a')" \
+  "" \
+  "restorecon skipped when unavailable"
+
 assert_eq \
   "$(printf '%s\n' 'main() { printf "stdin-main-ran"; }' 'if [[ ${#BASH_SOURCE[@]} -eq 0 ]]; then' '  main "$@"' 'elif [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' '  main "$@"' 'fi' | bash -u)" \
   "stdin-main-ran" \

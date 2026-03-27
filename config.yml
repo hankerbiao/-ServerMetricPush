@@ -2,7 +2,7 @@
 # 简单 key=value 格式
 
 # Pushgateway 设置
-pushgateway.url=http://localhost:9091
+pushgateway.url=http://10.17.154.252:9091
 pushgateway.job=node
 # 留空时会自动使用本机 IP，Prometheus 可据此区分不同服务器
 pushgateway.instance=
@@ -15,5 +15,5 @@ node_exporter.port=9100
 node_exporter.metrics_url=http://localhost:9100/metrics
 
 # 主服务设置（可选）
-control_plane.url=http://127.0.0.1:8080
+control_plane.url=http://10.17.154.252:8888
 control_plane.heartbeat_interval=30

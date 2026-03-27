@@ -162,7 +162,7 @@
 
         tbody.innerHTML = agents.map(agent => `
             <tr data-agent-id="${agent.agent_id}">
-                <td>${agent.hostname}<br><small>${agent.agent_id}</small></td>
+                <td>${agent.ip || agent.hostname}<br><small>${agent.hostname}</small></td>
                 <td>${renderBadge(agent.status)}</td>
                 <td>${agent.version}</td>
                 <td>${agent.os}/${agent.arch}</td>
@@ -197,7 +197,7 @@
 
         detail.innerHTML = `
             <div class="meta">
-                <div><strong>主机</strong>${agent.hostname}</div>
+                <div><strong>主机</strong>${agent.hostname} (${agent.ip || "未知"})</div>
                 <div><strong>状态</strong>${renderBadge(agent.status)}</div>
                 <div><strong>Pushgateway</strong>${agent.pushgateway_url}</div>
                 <div><strong>node_exporter</strong>${agent.node_exporter_metrics_url}</div>

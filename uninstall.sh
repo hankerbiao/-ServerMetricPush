@@ -55,8 +55,13 @@ ensure_systemctl() {
 service_is_known() {
   local service_name="$1"
   local service_path="$2"
+  local unit_file_name="${service_name}.service"
 
-  [[ -f "${service_path}" ]] || systemctl list-unit-files "${service_name}.service" >/dev/null 2>&1
+  if [[ -f "${service_path}" ]]; then
+    return 0
+  fi
+
+  systemctl list-unit-files "${unit_file_name}" --no-legend 2>/dev/null | grep -Fq "${unit_file_name}"
 }
 
 stop_and_disable_service() {

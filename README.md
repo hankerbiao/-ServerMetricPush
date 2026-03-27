@@ -1,192 +1,96 @@
 # node-push-exporter
 
-一款轻量级的系统指标推送工具，通过启动 node_exporter 采集系统指标，并推送到 Prometheus Pushgateway。
+启动本机 `node_exporter`，抓取 `/metrics`，再把指标推到 Prometheus Pushgateway。
 
-## 功能特性
+## 运行方式
 
-- **使用 node_exporter**：通过官方 node_exporter 采集指标，支持多种操作系统
-- **自动启动**：自动启动和管理 node_exporter 子进程
-- **Pushgateway 推送**：定时将指标推送到 Prometheus Pushgateway
-- **一键部署**：只需一条 curl 命令即可完成安装
-- **开机自启**：集成 systemd 服务，支持系统启动自动运行
-
-## 架构说明
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    目标机器                              │
-│                                                         │
-│  ┌──────────────────┐      ┌──────────────────────┐   │
-│  │  node_exporter   │      │  node-push-exporter  │   │
-│  │  (子进程 :9100)  │─────▶│  (抓取 & 推送)       │   │
-│  └──────────────────┘      └──────────┬───────────┘   │
-│                                       │               │
-│                              Pushgateway               │
-└───────────────────────────────────────┼───────────────┘
-                                        │
-                                        ▼
-                              ┌─────────────────────┐
-                              │  Prometheus Server  │
-                              └─────────────────────┘
-```
-
-## 快速安装
+本地调试时，程序默认读取当前目录下的 `./config.yml`。
 
 ```bash
-# 使用默认配置安装
-curl -sL https://example.com/install.sh | sudo bash
-
-# 指定 Pushgateway 地址安装
-curl -sL https://example.com/install.sh | sudo bash -s -- --pushgateway http://prometheus:9091
-
-# 完整参数安装示例
-curl -sL https://example.com/install.sh | sudo bash -s -- \
-  --pushgateway http://prometheus:9091 \
-  --interval 30 \
-  --job mynode \
-  --instance server1
+go build -o node-push-exporter ./src
+./node-push-exporter
 ```
 
-## 手动安装
-
-### 1. 安装 node_exporter
+也可以显式指定配置文件：
 
 ```bash
-# 下载 node_exporter
-VERSION="1.8.1"
-wget https://github.com/prometheus/node_exporter/releases/download/v${VERSION}/node_exporter-${VERSION}.linux-amd64.tar.gz
-
-# 解压并安装
-tar xzf node_exporter-${VERSION}.linux-amd64.tar.gz
-sudo cp node_exporter-${VERSION}.linux-amd64/node_exporter /usr/local/bin/
-sudo chmod +x /usr/local/bin/node_exporter
+go run ./src -config ./config.yml
 ```
 
-### 2. 安装 node-push-exporter
+## 配置文件
 
-```bash
-# 克隆项目并构建
-git clone https://github.com/your-repo/node-push-exporter.git
-cd node-push-exporter
-go build -o node-push-exporter ./src/
+配置格式是 `key=value`，默认示例就在仓库根目录 [config.yml](/Users/libiao/Documents/push_node/config.yml)。
 
-# 安装
-sudo cp node-push-exporter /usr/local/bin/
-sudo chmod +x /usr/local/bin/node-push-exporter
+```ini
+# Pushgateway 设置
+pushgateway.url=http://localhost:9091
+pushgateway.job=node
+pushgateway.instance=
+pushgateway.interval=60
+pushgateway.timeout=10
+
+# node_exporter 设置
+node_exporter.path=node_exporter
+node_exporter.port=9100
+node_exporter.metrics_url=http://localhost:9100/metrics
 ```
 
-### 3. 创建配置
+必填项缺失时，程序会在启动阶段直接报错退出。
 
-本地直接运行时，程序默认读取当前目录下的 `./config.yml`。
-如果使用 systemd 安装，再通过 `--config /etc/node-push-exporter/config.yaml` 显式指定系统配置路径。
+## 本地调试
+
+当前目录放好这两个文件即可：
+
+- `./node-push-exporter`
+- `./node_exporter`
+
+启动后会先确认 `node_exporter` 的 `/metrics` 已就绪，再开始首次推送。`node_exporter.path=node_exporter` 时，会按下面顺序找可执行文件：
+
+1. 当前目录下的 `./node_exporter`
+2. `PATH` 里的 `node_exporter`
+3. 常见安装路径
+
+## systemd
+
+如果用 systemd 部署，建议显式指定系统配置路径：
 
 ```bash
-vim ./config.yml
-
-# 或安装到系统路径
 sudo mkdir -p /etc/node-push-exporter
 sudo cp ./config.yml /etc/node-push-exporter/config.yaml
-sudo vim /etc/node-push-exporter/config.yaml
-```
-
-### 4. 创建 systemd 服务
-
-```bash
 sudo cp systemd/node-push-exporter.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable node-push-exporter
 sudo systemctl start node-push-exporter
 ```
 
-## 配置说明
+服务文件默认使用：
 
-默认配置文件路径为当前目录下的 `./config.yml`。
-如果通过 systemd 安装，服务文件会显式读取 `/etc/node-push-exporter/config.yaml`。
-配置格式为 `key=value`：
-
-```ini
-# Pushgateway 设置
-pushgateway.url=http://localhost:9091     # Pushgateway 地址
-pushgateway.job=node                      # 任务名称
-pushgateway.instance=                     # 实例名称(可选，默认使用主机名)
-pushgateway.interval=60                   # 推送间隔(秒)
-pushgateway.timeout=10                    # HTTP 超时(秒)
-
-# node_exporter 设置
-node_exporter.path=/usr/local/bin/node_exporter  # node_exporter 路径
-node_exporter.port=9100                           # 监听端口
-node_exporter.metrics_url=http://localhost:9100/metrics  # 抓取地址
+```bash
+--config /etc/node-push-exporter/config.yaml
 ```
-
-## 支持的指标
-
-node_exporter 采集的完整指标，包括但不限于：
-
-| 类别 | 指标前缀 | 说明 |
-|------|----------|------|
-| CPU | `node_cpu_*` | CPU 使用率、时间等 |
-| 内存 | `node_memory_*` | 内存总量、使用量、空闲等 |
-| 磁盘 | `node_disk_*` | 磁盘空间、IO 等 |
-| 网络 | `node_network_*` | 网络流量、错误等 |
-| 文件系统 | `node_filesystem_*` | 文件系统使用情况 |
-| 负载 | `node_load*` | 系统负载 |
-| 时间 | `node_time_*` | 系统时间 |
-
-完整指标列表请参考 [node_exporter README](https://github.com/prometheus/node_exporter)。
 
 ## 常用命令
 
 ```bash
-# 查看运行日志
-sudo journalctl -u node-push-exporter -f
-
-# 停止服务
-sudo systemctl stop node-push-exporter
-
-# 启动服务
-sudo systemctl start node-push-exporter
-
-# 重启服务
-sudo systemctl restart node-push-exporter
-
-# 查看服务状态
-sudo systemctl status node-push-exporter
-
-# 查看版本
-node-push-exporter --version
-
-# 直接访问 node_exporter 指标
+go test ./...
+./node-push-exporter --version
 curl http://localhost:9100/metrics
-```
-
-## 卸载
-
-```bash
-sudo systemctl stop node-push-exporter
-sudo systemctl disable node-push-exporter
-sudo rm /etc/systemd/system/node-push-exporter.service
-sudo rm /usr/local/bin/node-push-exporter
-sudo rm /usr/local/bin/node_exporter
-sudo rm -rf /etc/node-push-exporter
+sudo journalctl -u node-push-exporter -f
+sudo systemctl status node-push-exporter
 ```
 
 ## 故障排查
 
-### 问题：服务启动失败
+`node_exporter` 启动失败时，程序现在会在启动阶段直接报错，不会再误报“进程已启动”。优先检查：
+
+- `./node_exporter` 是否存在并有执行权限
+- `node_exporter.port` 对应端口是否被占用
+- `pushgateway.url` 是否可达
+
+如果是 systemd 环境，先看：
 
 ```bash
-# 查看详细日志
 journalctl -u node-push-exporter -n 100
-
-# 检查 node_exporter 是否可以运行
-/usr/local/bin/node_exporter --version
-```
-
-### 问题：无法连接到 Pushgateway
-
-```bash
-# 测试网络连接
-curl -v http://your-pushgateway:9091/metrics
 ```
 
 ## 许可证
